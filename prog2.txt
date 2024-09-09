@@ -1,0 +1,161 @@
+import time
+import os
+import fcntl
+import wiringpi
+
+# Dirección I2C del BME280
+BME280_I2C_ADDR = 0x76  
+
+# Registros del BME280
+BME280_REG_ID = 0xD0
+BME280_REG_RESET = 0xE0
+BME280_REG_CTRL_HUM = 0xF2
+BME280_REG_STATUS = 0xF3
+BME280_REG_CTRL_MEAS = 0xF4
+BME280_REG_CONFIG = 0xF5
+BME280_REG_DATA = 0xF7
+
+# Definición de pines (WiringPi pin numbers)
+RS = 7
+E = 8
+D4 = 9
+D5 = 10
+D6 = 13
+D7 = 16
+
+# Archivo de dispositivo I2C para la Orange Pi
+I2C_FILE = "/dev/i2c-3"  # Cambiar si es necesario
+
+# Configuración de WiringPi
+wiringpi.wiringPiSetup()
+
+# Configurar pines como salida
+wiringpi.pinMode(RS, wiringpi.OUTPUT)
+wiringpi.pinMode(E, wiringpi.OUTPUT)
+wiringpi.pinMode(D4, wiringpi.OUTPUT)
+wiringpi.pinMode(D5, wiringpi.OUTPUT)
+wiringpi.pinMode(D6, wiringpi.OUTPUT)
+wiringpi.pinMode(D7, wiringpi.OUTPUT)
+
+# Función para escribir un byte en un registro
+def write_register(fd, reg, data):
+    fcntl.ioctl(fd, 0x0703, BME280_I2C_ADDR)  # Seleccionar dispositivo
+    os.write(fd, bytearray([reg, data]))
+
+# Función para leer varios bytes a partir de un registro
+def read_register(fd, reg, length):
+    fcntl.ioctl(fd, 0x0703, BME280_I2C_ADDR)  # Seleccionar dispositivo
+    os.write(fd, bytearray([reg]))  # Enviar el registro desde el que queremos leer
+    return os.read(fd, length)
+
+# Inicializar BME280
+def init_bme280(fd):
+    # Leer el ID del dispositivo
+    chip_id = read_register(fd, BME280_REG_ID, 1)
+    print(f"ID del chip: {chip_id.hex()}")
+
+    # Reseteamos el dispositivo
+    write_register(fd, BME280_REG_RESET, 0xB6)
+    time.sleep(0.1)  # Esperamos 100 ms para que se reinicie
+
+    # Configuramos los registros de control (modo forzado, etc.)
+    write_register(fd, BME280_REG_CTRL_HUM, 0x01)  # Configuración de humedad
+    write_register(fd, BME280_REG_CTRL_MEAS, 0x27)  # Configuración de presión y temperatura
+    write_register(fd, BME280_REG_CONFIG, 0xA0)  # Configuración de tiempo de espera y filtro
+
+# Leer datos de temperatura, presión y humedad
+def read_bme280(fd):
+    data = read_register(fd, BME280_REG_DATA, 8)  # Leer 8 bytes desde 0xF7
+    # Interpretar los datos crudos de presión, temperatura y humedad
+    pressure_raw = (data[0] << 12) | (data[1] << 4) | (data[2] >> 4)
+    temperature_raw = (data[3] << 12) | (data[4] << 4) | (data[5] >> 4)
+    humidity_raw = (data[6] << 8) | data[7]
+
+    # Aplicar fórmulas de calibración aproximadas (mejor usar coeficientes del sensor)
+    temperature = temperature_raw / 100.0  # Ajusta según calibración exacta
+    pressure = pressure_raw / 100.0  # Ajusta según calibración exacta
+    humidity = humidity_raw / 1024.0  # Ajusta según calibración exacta
+
+    return temperature, pressure, humidity
+
+def lcd_command(cmd):
+    wiringpi.digitalWrite(RS, wiringpi.LOW)
+    wiringpi.digitalWrite(D4, (cmd >> 4) & 0x01)
+    wiringpi.digitalWrite(D5, (cmd >> 5) & 0x01)
+    wiringpi.digitalWrite(D6, (cmd >> 6) & 0x01)
+    wiringpi.digitalWrite(D7, (cmd >> 7) & 0x01)
+    wiringpi.digitalWrite(E, wiringpi.HIGH)
+    time.sleep(0.001)
+    wiringpi.digitalWrite(E, wiringpi.LOW)
+    time.sleep(0.001)
+    wiringpi.digitalWrite(D4, cmd & 0x01)
+    wiringpi.digitalWrite(D5, (cmd >> 1) & 0x01)
+    wiringpi.digitalWrite(D6, (cmd >> 2) & 0x01)
+    wiringpi.digitalWrite(D7, (cmd >> 3) & 0x01)
+    wiringpi.digitalWrite(E, wiringpi.HIGH)
+    time.sleep(0.001)
+    wiringpi.digitalWrite(E, wiringpi.LOW)
+    time.sleep(0.001)
+
+def lcd_data(data):
+    wiringpi.digitalWrite(RS, wiringpi.HIGH)
+    wiringpi.digitalWrite(D4, (data >> 4) & 0x01)
+    wiringpi.digitalWrite(D5, (data >> 5) & 0x01)
+    wiringpi.digitalWrite(D6, (data >> 6) & 0x01)
+    wiringpi.digitalWrite(D7, (data >> 7) & 0x01)
+    wiringpi.digitalWrite(E, wiringpi.HIGH)
+    time.sleep(0.001)
+    wiringpi.digitalWrite(E, wiringpi.LOW)
+    time.sleep(0.001)
+    wiringpi.digitalWrite(D4, data & 0x01)
+    wiringpi.digitalWrite(D5, (data >> 1) & 0x01)
+    wiringpi.digitalWrite(D6, (data >> 2) & 0x01)
+    wiringpi.digitalWrite(D7, (data >> 3) & 0x01)
+    wiringpi.digitalWrite(E, wiringpi.HIGH)
+    time.sleep(0.001)
+    wiringpi.digitalWrite(E, wiringpi.LOW)
+    time.sleep(0.001)
+
+def lcd_init():
+    time.sleep(0.015)
+    lcd_command(0x33)  # Inicialización
+    lcd_command(0x32)  # Modo de 4 bits
+    lcd_command(0x28)  # 2 líneas, 5x8 caracteres
+    lcd_command(0x0C)  # Pantalla ON, cursor OFF
+    lcd_command(0x06)  # Incrementar cursor
+    lcd_command(0x01)  # Limpiar pantalla
+    time.sleep(0.002)
+
+def lcd_print(message):
+    lcd_command(0x01)  # Limpiar pantalla
+    time.sleep(0.002)
+    for char in message:
+        lcd_data(ord(char))
+
+def main():
+    # Abrir archivo del dispositivo I2C
+    fd = os.open(I2C_FILE, os.O_RDWR)
+    # Inicializar pantalla
+    lcd_init()
+    try:
+        # Inicializar BME280
+        init_bme280(fd)
+        
+        while True:
+            # Leer los datos del sensor
+            temperature, pressure, humidity = read_bme280(fd)
+            print(f"Temperatura: {temperature:.2f} °C, Presión: {pressure:.2f} hPa, Humedad: {humidity:.2f} %")
+            messages = [
+                "Lecturas:",
+                f"Temp: {temperature:.2f}°C",
+                f"Pres: {pressure:.2f}hPa",
+                f"Hume: {humidity:.2f}%"
+            ]
+            for message in messages:
+                lcd_print(message)
+                time.sleep(2)  # Esperamos 2 segundos antes de leer nuevamente
+    finally:
+        os.close(fd)
+
+if __name__ == "__main__":
+    main()
