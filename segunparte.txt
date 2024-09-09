@@ -1,0 +1,5 @@
+ls /dev/i2c-*
+sudo i2cdetect -y 1  # Para el bus 1
+sudo i2cdetect -y 3  # Para el bus 3
+sudo apt-get install wiringpi
+gpio readall
